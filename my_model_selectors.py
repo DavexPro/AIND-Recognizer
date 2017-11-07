@@ -75,13 +75,50 @@ class SelectorBIC(ModelSelector):
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        bic_scores = []
+        """
+        N is the number of data points, f is the number of features:
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        N, f = self.X.shape
+
+        Having m as the num_components, The free parameters p are a sum of:
+
+        The free transition probability parameters, which is the size of the transmat matrix less one row because they add up to 1 and therefore the final row is deterministic, so m*(m-1)
+        The free starting probabilities, which is the size of startprob minus 1 because it adds to 1.0 and last one can be calculated so m-1
+        The number of means, which is m*f
+        Number of covariances which is the size of the covars matrix, which for "diag" is m*f
+        All of the above is equal to:
+
+        p = m^2 +2mf-1
+
+        Finally, the BIC equation is:
+
+        BIC = -2 * logL + p * logN
+        """
+        try:
+            n_components = range(self.min_n_components, self.max_n_components + 1)
+            for num_states in n_components:
+                model = self.base_model(num_states)
+                log_l = model.score(self.X, self.lengths)
+                p = num_states ** 2 + 2 * num_states * model.n_features - 1
+                bic_score = -2 * log_l + p * math.log(num_states)
+                bic_scores.append(bic_score)
+        except Exception as e:
+            pass
+
+        states = n_components[np.argmin(bic_scores)] if bic_scores else self.n_constant
+        return self.base_model(states)
 
 
 class SelectorDIC(ModelSelector):
-    ''' select best model based on Discriminative Information Criterion
+    ''' 
+    Abbr.
+        - DIC - Discriminative Information Criterion
+
+    Equation.
+        - DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
+
+    select best model based on Discriminative Information Criterion
 
     Biem, Alain. "A model selection criterion for classification: Application to hmm topology optimization."
     Document Analysis and Recognition, 2003. Proceedings. Seventh International Conference on. IEEE, 2003.
@@ -93,8 +130,33 @@ class SelectorDIC(ModelSelector):
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        models = []
+        dic_scores = []
+        other_words = []
+
+        for word in self.words:
+            if word != self.this_word:
+                other_words.append(self.hwords[word])
+        try:
+            for num_states in range(self.min_n_components, self.max_n_components + 1):
+                model = self.base_model(num_states)
+                word_log_p = model.score(self.X, self.lengths)
+                models.append([word_log_p, model])
+
+        except Exception as e:
+            pass
+
+        for model in models:
+            word_log_p, hmm_model = model
+            
+            # equal to 1/(M-1)SUM(log(P(X(all but i))
+            anti_log_p = np.mean([hmm_model.score(word[0], word[1]) for word in other_words])
+            
+            dic_score = word_log_p - anti_log_p 
+            dic_scores.append([dic_score, hmm_model])
+
+        best_dic = max(dic_scores, key = lambda x: x[0])[1] if dic_scores else None
+        return best_dic
 
 
 class SelectorCV(ModelSelector):
@@ -105,5 +167,29 @@ class SelectorCV(ModelSelector):
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        cv_scores = []
+        kf = KFold(n_splits = 3, shuffle = False, random_state = None)
+
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
+            log_ls = []
+            try:
+                if len(self.sequences) > 2:
+                    for train_index, test_index in kf.split(self.sequences):
+
+                        self.X, self.lengths = combine_sequences(train_index, self.sequences)
+                        X_test, lengths_test = combine_sequences(test_index, self.sequences)
+
+                        hmm_model = self.base_model(num_states)
+                        log_l = hmm_model.score(X_test, lengths_test)
+                else:
+                    hmm_model = self.base_model(num_states)
+                    log_l = hmm_model.score(self.X, self.lengths)
+
+                log_ls.append(log_l)
+                cv_scores.append([np.mean(log_ls), hmm_model])
+
+            except Exception as e:
+                pass
+
+        best_cv = max(cv_scores, key = lambda x: x[0])[1] if cv_scores else None
+        return best_cv
